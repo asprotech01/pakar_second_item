@@ -11,7 +11,7 @@ class AssessmentResult extends Model
         'assessment_session_id', 'primary_conclusion_fact_id', 'classification',
         'confidence_score', 'data_completeness', 'risk_level', 'threshold_met',
         'confidence_threshold', 'completeness_threshold', 'active_rules', 'contributing_factors',
-        'unverified_data', 'recommendations', 'evaluated_at', 'validated_by_expert_id', 'expert_classification',
+        'unverified_data', 'recommendations', 'not_evaluable_rules', 'evaluated_at', 'validated_by_expert_id', 'expert_classification',
         'expert_confidence_score', 'expert_validation_notes', 'expert_agrees', 'expert_validated_at',
     ];
 
@@ -29,6 +29,7 @@ class AssessmentResult extends Model
             'contributing_factors' => 'array',
             'unverified_data' => 'array',
             'recommendations' => 'array',
+            'not_evaluable_rules' => 'array',
             'evaluated_at' => 'datetime',
             'expert_validated_at' => 'datetime',
         ];

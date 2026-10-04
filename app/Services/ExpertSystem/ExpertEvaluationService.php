@@ -2,6 +2,7 @@
 
 namespace App\Services\ExpertSystem;
 
+use App\Models\AssessmentAnswer;
 use App\Models\AssessmentResult;
 use App\Models\AssessmentSession;
 use App\Models\Fact;
@@ -42,6 +43,7 @@ class ExpertEvaluationService
         $chaining = $this->forwardChaining->evaluate($initialFacts, $rules);
         $certainty = $this->certaintyFactors->evaluate($initialFacts, $chaining['fired_rules']);
         $knownFacts = $this->loadFactMetadata($chaining['known_facts']);
+        $notEvaluableRules = $chaining['not_evaluable_rules'] ?? [];
 
         $completeness = $this->dataCompleteness($questions, $answers);
         $conclusions = $this->conclusions($chaining['fired_rules'], $certainty['certainty_by_fact']);
@@ -62,6 +64,7 @@ class ExpertEvaluationService
             'classification' => $rule['classification'],
             'risk_level' => $rule['risk_level'],
             'certainty_factor' => $this->ruleCertainty($certainty['rule_contributions'], $rule['code']),
+            'experts' => $rule['experts'],
         ], $chaining['fired_rules']);
 
         $explanation = $this->contributingFactors($questions, $answers, $initialFacts, $knownFacts);
@@ -84,7 +87,8 @@ class ExpertEvaluationService
             $completenessThreshold,
             $activeRules,
             $explanation,
-            $recommendationData
+            $recommendationData,
+            $notEvaluableRules
         ) {
             $result = AssessmentResult::updateOrCreate(
                 ['assessment_session_id' => $session->id],
@@ -101,6 +105,7 @@ class ExpertEvaluationService
                     'contributing_factors' => $explanation,
                     'unverified_data' => $recommendationData['unverified_data'],
                     'recommendations' => $recommendationData['recommendations'],
+                    'not_evaluable_rules' => $notEvaluableRules,
                     'evaluated_at' => now(),
                 ]
             );
@@ -117,12 +122,25 @@ class ExpertEvaluationService
 
         foreach ($questions as $question) {
             $answer = $answers->get($question->id);
-            $option = $answer?->option;
+            if ($answer === null || $answer->answer_state !== 'KNOWN' || $answer->evidence_source === 'UNKNOWN') {
+                continue;
+            }
 
-            if ($answer === null
-                || $answer->answer_state !== 'KNOWN'
-                || $answer->evidence_source === 'UNKNOWN'
-                || $option === null
+            if ($answer->observed_value !== null && $this->shouldTreatAsDirectFact($question, $answer)) {
+                $value = $answer->observed_value;
+                if (is_numeric((string) $value)) {
+                    $value = (float) $value;
+                }
+
+                $facts[$question->code] = [
+                    'certainty' => max(0, min(1, (float) $answer->certainty_factor)),
+                    'value' => $value,
+                    'id' => null,
+                ];
+            }
+
+            $option = $answer?->option;
+            if ($option === null
                 || $option->question_id !== $question->id
                 || $option->fact === null
                 || ! $option->fact->is_active) {
@@ -149,38 +167,78 @@ class ExpertEvaluationService
         return $facts;
     }
 
+    private function shouldTreatAsDirectFact(Question $question, AssessmentAnswer $answer): bool
+    {
+        if ($answer->question_option_id !== null) {
+            return false;
+        }
+
+        if (is_string($answer->observed_value) && trim($answer->observed_value) === '') {
+            return false;
+        }
+
+        $inputType = strtoupper((string) ($question->input_type ?? 'single_choice'));
+
+        return in_array($inputType, ['NUMBER', 'NUMERIC', 'TEXT', 'BOOLEAN'], true)
+            || is_numeric((string) $answer->observed_value);
+    }
+
     private function activeRules(): array
     {
         return Rule::query()
             ->where('is_active', true)
             ->whereHas('conclusion', fn ($query) => $query->where('is_active', true))
-            ->with(['conditions.fact' => fn ($query) => $query->where('is_active', true), 'conclusion'])
+            ->with([
+                'conditions.fact' => fn ($query) => $query->where('is_active', true),
+                'conclusion',
+                'experts' => fn ($query) => $query->where('experts.is_active', true),
+            ])
             ->orderByDesc('priority')
             ->orderBy('id')
             ->get()
             ->filter(fn (Rule $rule) => $rule->conditions->isNotEmpty()
                 && $rule->conditions->every(fn ($condition) => $condition->fact !== null))
-            ->map(fn (Rule $rule) => [
-                'id' => $rule->id,
-                'code' => $rule->code,
-                'name' => $rule->name,
-                'description' => $rule->description,
-                'conclusion' => $rule->conclusion->code,
-                'certainty_factor' => $rule->certainty_factor,
-                'classification' => $rule->classification ?? $rule->conclusion->classification,
-                'risk_level' => $rule->risk_level ?? $rule->conclusion->risk_level,
-                'conditions' => $rule->conditions->map(fn ($condition) => [
-                    'fact' => $condition->fact->code,
-                    'operator' => $condition->operator,
-                    'expected_value' => $condition->expected_value,
-                ])->all(),
-            ])
+            ->map(function (Rule $rule) {
+                $experts = $rule->experts
+                    ->filter(fn ($expert) => $expert->pivot->certainty_factor !== null)
+                    ->values();
+                $expertCertainties = $experts
+                    ->map(fn ($expert) => (float) $expert->pivot->certainty_factor)
+                    ->all();
+                $certaintyFactor = $expertCertainties === []
+                    ? $rule->certainty_factor
+                    : $this->certaintyFactors->combine($expertCertainties);
+
+                return [
+                    'id' => $rule->id,
+                    'code' => $rule->code,
+                    'name' => $rule->name,
+                    'description' => $rule->description,
+                    'conclusion' => $rule->conclusion->code,
+                    'certainty_factor' => $certaintyFactor,
+                    'classification' => $rule->classification ?? $rule->conclusion->classification,
+                    'risk_level' => $rule->risk_level ?? $rule->conclusion->risk_level,
+                    'experts' => $experts->map(fn ($expert) => [
+                        'name' => $expert->name,
+                        'certainty_factor' => (float) $expert->pivot->certainty_factor,
+                    ])->all(),
+                    'conditions' => $rule->conditions->map(fn ($condition) => [
+                        'fact' => $condition->fact->code,
+                        'operator' => $condition->operator,
+                        'expected_value' => $condition->expected_value,
+                        'group_number' => $condition->group_number,
+                        'logical_operator' => $condition->logical_operator,
+                    ])->all(),
+                ];
+            })
             ->all();
     }
 
     private function dataCompleteness(Collection $questions, Collection $answers): float
     {
-        $requiredQuestions = $questions->where('is_required', true);
+        $requiredQuestions = $questions->where('is_required', true)->filter(
+            fn (Question $question) => $answers->get($question->id)?->answer_state !== AssessmentAnswer::STATE_NOT_APPLICABLE
+        );
         $totalWeight = (float) $requiredQuestions->sum('completeness_weight');
 
         if ($totalWeight <= 0) {

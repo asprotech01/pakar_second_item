@@ -33,7 +33,14 @@ class RecommendationService
                 continue;
             }
 
-            if ($answer->answer_state === 'UNKNOWN') {
+            if ($answer->answer_state === AssessmentAnswer::STATE_NOT_APPLICABLE) {
+                continue;
+            }
+
+            if ($answer->answer_state === AssessmentAnswer::STATE_NOT_TESTED) {
+                $unverified[] = $this->unverifiedQuestion($question, $answer, 'not_tested');
+                $unverifiedQuestionIds[] = $question->id;
+            } elseif ($answer->answer_state === AssessmentAnswer::STATE_UNKNOWN) {
                 $unverified[] = $this->unverifiedQuestion($question, $answer, 'unknown');
                 $unverifiedQuestionIds[] = $question->id;
             } elseif ($answer->evidence_source === 'UNKNOWN') {

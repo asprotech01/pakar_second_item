@@ -36,18 +36,35 @@ class CertaintyFactorEngine
         $contributionsByConclusion = [];
 
         foreach ($firedRules as $rule) {
-            $conditionCertainties = [];
-            foreach ($rule['conditions'] ?? [] as $condition) {
-                $conditionCertainties[] = $certaintyByFact[$condition['fact'] ?? ''] ?? 0.0;
+            $matchedGroups = $rule['matched_condition_groups'] ?? [$rule['conditions'] ?? []];
+            $groupCertainties = [];
+            foreach ($matchedGroups as $group) {
+                $groupCertainty = null;
+                foreach ($group as $condition) {
+                    $conditionCertainty = $certaintyByFact[$condition['fact'] ?? ''] ?? 0.0;
+                    if ($groupCertainty === null) {
+                        $groupCertainty = $conditionCertainty;
+
+                        continue;
+                    }
+
+                    $groupCertainty = strtoupper((string) ($condition['logical_operator'] ?? 'AND')) === 'OR'
+                        ? max($groupCertainty, $conditionCertainty)
+                        : min($groupCertainty, $conditionCertainty);
+                }
+
+                if ($groupCertainty !== null) {
+                    $groupCertainties[] = $groupCertainty;
+                }
             }
 
             $conclusion = $rule['conclusion'] ?? null;
-            if (! is_string($conclusion) || $conclusion === '' || $conditionCertainties === []) {
+            if (! is_string($conclusion) || $conclusion === '' || $groupCertainties === []) {
                 continue;
             }
 
             $ruleCertainty = $this->clamp((float) ($rule['certainty_factor'] ?? 1));
-            $contribution = $this->applyRule($ruleCertainty, $conditionCertainties);
+            $contribution = $this->applyRule($ruleCertainty, [max($groupCertainties)]);
             $contributionsByConclusion[$conclusion][] = $contribution;
             $certaintyByFact[$conclusion] = $this->combine($contributionsByConclusion[$conclusion]);
             $ruleContributions[] = [

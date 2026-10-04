@@ -9,6 +9,45 @@
         'unverified' => 'Belum cukup terverifikasi',
     ];
     $riskLabels = ['low' => 'Rendah', 'medium' => 'Sedang', 'high' => 'Tinggi', 'critical' => 'Kritis', 'unknown' => 'Belum diketahui'];
+    $repairEstimateEntries = collect($result->recommendations ?? [])
+        ->map(fn ($recommendation) => $recommendation['title'] ?? '')
+        ->merge(collect($result->active_rules ?? [])->map(fn ($rule) => $rule['name'] ?? ''))
+        ->filter()
+        ->map(function ($label) {
+            $normalized = strtolower((string) $label);
+
+            if (str_contains($normalized, 'baterai')) {
+                return ['name' => 'Baterai', 'reason' => 'Risiko kesehatan baterai dan pengisian', 'estimate' => 'Rp350.000 – Rp700.000'];
+            }
+
+            if (str_contains($normalized, 'layar') || str_contains($normalized, 'display')) {
+                return ['name' => 'Layar', 'reason' => 'Kerusakan visual atau sentuh', 'estimate' => 'Rp550.000 – Rp1.600.000'];
+            }
+
+            if (str_contains($normalized, 'port') || str_contains($normalized, 'charging') || str_contains($normalized, 'pengisian')) {
+                return ['name' => 'Port Pengisian', 'reason' => 'Port / charging tidak stabil', 'estimate' => 'Rp200.000 – Rp450.000'];
+            }
+
+            if (str_contains($normalized, 'kamera')) {
+                return ['name' => 'Kamera', 'reason' => 'Kamera depan atau belakang bermasalah', 'estimate' => 'Rp350.000 – Rp950.000'];
+            }
+
+            if (str_contains($normalized, 'audio') || str_contains($normalized, 'speaker') || str_contains($normalized, 'mikrofon')) {
+                return ['name' => 'Audio', 'reason' => 'Speaker atau mikrofon tidak normal', 'estimate' => 'Rp150.000 – Rp450.000'];
+            }
+
+            if (str_contains($normalized, 'tombol') || str_contains($normalized, 'button') || str_contains($normalized, 'control')) {
+                return ['name' => 'Tombol', 'reason' => 'Kontrol fisik tidak responsif', 'estimate' => 'Rp120.000 – Rp350.000'];
+            }
+
+            if (str_contains($normalized, 'konektivitas') || str_contains($normalized, 'wifi') || str_contains($normalized, 'bluetooth') || str_contains($normalized, 'sim')) {
+                return ['name' => 'Konektivitas', 'reason' => 'Jaringan atau koneksi nirkabel bermasalah', 'estimate' => 'Rp180.000 – Rp600.000'];
+            }
+
+            return ['name' => 'Komponen teknis', 'reason' => 'Pemeriksaan lanjutan diperlukan', 'estimate' => 'Rp150.000 – Rp500.000'];
+        })
+        ->unique(fn ($item) => $item['name'])
+        ->values();
 @endphp
 
 @section('title', 'Hasil asesmen | Tilik')
@@ -53,7 +92,7 @@
             <div class="section-heading"><div><p class="eyebrow">PERLU DIVERIFIKASI <span class="eyebrow-rule"></span> {{ count($result->unverified_data) }}</p><h2>Data belum terverifikasi</h2></div></div>
             <div class="unverified-list">
                 @foreach ($result->unverified_data as $item)
-                    <div class="unverified-row"><span class="unknown-badge">?</span><span><strong>{{ $item['question'] }}</strong><small>{{ $item['reason'] === 'not_answered' ? 'Belum dijawab' : ($item['reason'] === 'source_unknown' ? 'Sumber bukti belum diketahui' : 'Kondisi belum diketahui') }}</small></span><span class="source-tag">{{ str_replace('_', ' ', $item['source']) }}</span></div>
+                    <div class="unverified-row"><span class="unknown-badge">?</span><span><strong>{{ $item['question'] }}</strong><small>{{ match ($item['reason']) { 'not_answered' => 'Belum dijawab', 'not_tested' => 'Belum diperiksa', 'source_unknown' => 'Sumber bukti belum diketahui', default => 'Kondisi belum diketahui' } }}</small></span><span class="source-tag">{{ str_replace('_', ' ', $item['source']) }}</span></div>
                 @endforeach
             </div>
         </section>
@@ -63,7 +102,7 @@
         <section class="report-section rules-section">
             <div class="section-heading"><div><p class="eyebrow">JEJAK INFERENSI <span class="eyebrow-rule"></span> {{ count($result->active_rules ?? []) }}</p><h2>Rules yang aktif</h2></div></div>
             @forelse ($result->active_rules ?? [] as $index => $rule)
-                <article class="rule-row"><span class="rule-number">{{ str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT) }}</span><div><h3>{{ $rule['name'] }}</h3><p>{{ $rule['description'] }}</p><small>{{ $rule['code'] }} <span>→</span> {{ $rule['conclusion'] }}</small></div><span class="rule-cf">{{ number_format($rule['certainty_factor'] * 100, 0) }}%<small>CF RULE</small></span></article>
+                <article class="rule-row"><span class="rule-number">{{ str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT) }}</span><div><h3>{{ $rule['name'] }}</h3><p>{{ $rule['description'] }}</p><small>{{ $rule['code'] }} <span>→</span> {{ $rule['conclusion'] }}</small>@if (! empty($rule['experts']))<small class="rule-experts">CF ahli: {{ implode(', ', array_column($rule['experts'], 'name')) }}</small>@endif</div><span class="rule-cf">{{ number_format($rule['certainty_factor'] * 100, 0) }}%<small>CF RULE</small></span></article>
             @empty
                 <div class="empty-report">Tidak ada rule kesimpulan yang aktif. Lengkapi pemeriksaan yang belum diketahui untuk memperoleh penilaian.</div>
             @endforelse
@@ -89,5 +128,58 @@
             </div>
         </section>
     @endif
+
+    @if ($repairEstimateEntries->isNotEmpty())
+        <section class="report-section repair-estimate-section">
+            <div class="section-heading"><div><p class="eyebrow">ESTIMASI PERBAIKAN <span class="eyebrow-rule"></span> {{ $repairEstimateEntries->count() }}</p><h2>Komponen yang perlu ditangani</h2></div></div>
+            <div class="estimate-list">
+                @foreach ($repairEstimateEntries as $estimate)
+                    <article class="recommendation-item estimate-item">
+                        <span class="recommendation-index">{{ str_pad((string) $loop->iteration, 2, '0', STR_PAD_LEFT) }}</span>
+                        <div>
+                            <h3>{{ $estimate['name'] }}</h3>
+                            <p>{{ $estimate['reason'] }}</p>
+                        </div>
+                        <span class="estimate-price">{{ $estimate['estimate'] }}</span>
+                    </article>
+                @endforeach
+            </div>
+        </section>
+    @endif
+
+    <section class="purchase-conclusion verdict-{{ $result->classification }}">
+        <div>
+            <p class="eyebrow">Kesimpulan pembelian <span class="eyebrow-rule"></span> {{ strtoupper(str_replace('_', ' ', $result->classification ?? 'unverified')) }}</p>
+            <h2>
+                @if ($result->classification === 'layak' && $result->threshold_met)
+                    Produk layak dibeli
+                @elseif ($result->classification === 'tidak_direkomendasikan')
+                    Produk tidak layak dibeli
+                @elseif ($result->classification === 'bersyarat')
+                    Tunda pembelian sampai temuan ditangani
+                @else
+                    Belum cukup bukti untuk memutuskan
+                @endif
+            </h2>
+            <p>
+                @if ($result->classification === 'layak' && $result->threshold_met)
+                    Hasil pemeriksaan mendukung pembelian. Tetap cocokkan IMEI, pastikan akun lama sudah dilepas, dan sepakati garansi transaksi.
+                @elseif ($result->classification === 'tidak_direkomendasikan')
+                    Temuan berisiko tinggi membuat perangkat ini sebaiknya dihindari. Pertimbangkan unit lain daripada menanggung risiko keamanan atau kerusakan lanjutan.
+                @elseif ($result->classification === 'bersyarat')
+                    Gunakan estimasi biaya perbaikan di atas sebagai acuan awal. Pertimbangkan kembali pembelian setelah teknisi memastikan kondisi komponen dan biaya aktual.
+                @else
+                    Lengkapi pemeriksaan yang belum diketahui atau belum dilakukan sebelum membayar. Jangan menganggap data yang belum diverifikasi sebagai kondisi normal.
+                @endif
+            </p>
+            @if (! empty($result->recommendations))
+                <ul class="purchase-advice-list">
+                    @foreach ($result->recommendations as $recommendation)
+                        <li><strong>{{ $recommendation['title'] }}</strong> {{ $recommendation['body'] }}</li>
+                    @endforeach
+                </ul>
+            @endif
+        </div>
+    </section>
 </div>
 @endsection

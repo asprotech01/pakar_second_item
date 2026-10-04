@@ -58,7 +58,7 @@
                     <div class="device-card-title"><h3>{{ $deviceType->name }}</h3><span>{{ str_pad((string) $deviceType->questions_count, 2, '0', STR_PAD_LEFT) }} cek</span></div>
                     <label class="device-label-field">
                         <span>Nama/model perangkat <small>opsional</small></span>
-                        <input type="text" name="device_label" maxlength="100" placeholder="Contoh: Galaxy A54">
+                        <input type="text" name="device_label" maxlength="100" placeholder="{{ $deviceType->platform === 'ios' ? 'Contoh: iPhone 12 Pro' : 'Contoh: Galaxy A54' }}">
                     </label>
                     <button class="button button-dark" type="submit">Mulai inspeksi <span aria-hidden="true">→</span></button>
                 </form>

@@ -41,9 +41,12 @@
                 @foreach ($questions as $index => $question)
                     @php
                         $existing = $answers->get($question->id);
-                        $existingSelection = $existing?->answer_state === 'UNKNOWN'
-                            ? 'unknown'
-                            : ($existing?->question_option_id ? 'option:'.$existing->question_option_id : null);
+                        $existingSelection = match ($existing?->answer_state) {
+                            'UNKNOWN' => 'unknown',
+                            'NOT_APPLICABLE' => 'not_applicable',
+                            'NOT_TESTED' => 'not_tested',
+                            default => $existing?->question_option_id ? 'option:'.$existing->question_option_id : null,
+                        };
                     @endphp
                     <section class="question-step" data-question-step data-category="{{ $question->inspectionCategory->name }}">
                         <div class="question-kicker"><span>PEMERIKSAAN {{ str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT) }}</span><span>{{ $question->inspectionCategory->name }}</span></div>
@@ -66,6 +69,18 @@
                                 <span class="choice-indicator"></span>
                                 <span class="answer-option-copy"><strong>Belum diketahui</strong><small>Belum diperiksa atau bukti belum cukup</small></span>
                                 <span class="choice-tag tag-unknown">UNKNOWN</span>
+                            </label>
+                            <label class="answer-option answer-unknown">
+                                <input type="radio" name="answers[{{ $question->id }}][selection]" value="not_tested" {{ $existingSelection === 'not_tested' ? 'checked' : '' }}>
+                                <span class="choice-indicator"></span>
+                                <span class="answer-option-copy"><strong>Belum diperiksa</strong><small>Pemeriksaan sengaja belum dilakukan</small></span>
+                                <span class="choice-tag tag-not-tested">NOT TESTED</span>
+                            </label>
+                            <label class="answer-option answer-unknown">
+                                <input type="radio" name="answers[{{ $question->id }}][selection]" value="not_applicable" {{ $existingSelection === 'not_applicable' ? 'checked' : '' }}>
+                                <span class="choice-indicator"></span>
+                                <span class="answer-option-copy"><strong>Tidak berlaku</strong><small>Pemeriksaan ini tidak relevan untuk perangkat ini</small></span>
+                                <span class="choice-tag tag-not-applicable">N/A</span>
                             </label>
                         </fieldset>
                         <div class="evidence-fields" data-evidence-fields>

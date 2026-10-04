@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\DeviceCategory;
 use App\Models\DeviceType;
+use App\Models\Expert;
 use App\Models\Fact;
 use App\Models\InspectionCategory;
 use App\Models\Question;
@@ -113,6 +114,15 @@ class ExpertSystemSeeder extends Seeder
             'device_not_recommended', 'Tidak direkomendasikan', true, 'tidak_direkomendasikan', 'high'
         );
 
+        $expert = Expert::firstOrCreate(
+            ['email' => 'ahli.pemeriksa@tilik.local'],
+            [
+                'name' => 'Panel Ahli Pemeriksaan Perangkat',
+                'affiliation' => 'Tilik',
+                'credentials' => 'Validasi kondisi perangkat bekas',
+            ]
+        );
+
         $experts = [
             'battery_swelling' => ['avoid_swollen_battery', 'Baterai menggembung berisiko keselamatan.', 'critical', 0.99],
             'activation_lock' => ['avoid_locked_device', 'Perangkat terkunci akun tidak siap digunakan.', 'high', 0.98],
@@ -120,7 +130,7 @@ class ExpertSystemSeeder extends Seeder
         ];
         foreach ($experts as $questionCode => [$ruleCode, $description, $risk, $certainty]) {
             $issueFact = $facts[$questionCode.'_issue'];
-            $this->rule($ruleCode, $description, $facts['device_not_recommended'], $issueFact, $certainty, 'tidak_direkomendasikan', $risk);
+            $this->rule($ruleCode, $description, $facts['device_not_recommended'], $issueFact, $certainty, 'tidak_direkomendasikan', $risk, $expert);
             $this->recommendation($issueFact, null, 'Perlu perhatian khusus', $description, 1);
         }
 
@@ -138,7 +148,8 @@ class ExpertSystemSeeder extends Seeder
                 $issueFact,
                 0.85,
                 'bersyarat',
-                'medium'
+                'medium',
+                $expert
             );
             $this->recommendation(
                 $issueFact,
@@ -167,6 +178,13 @@ class ExpertSystemSeeder extends Seeder
                 ['operator' => 'PRESENT']
             );
         }
+        $viableRule->experts()->syncWithoutDetaching([
+            $expert->id => [
+                'certainty_factor' => 0.90,
+                'notes' => 'CF ahli untuk rule seluruh pemeriksaan normal.',
+                'validated_at' => now(),
+            ],
+        ]);
 
     }
 
@@ -195,7 +213,8 @@ class ExpertSystemSeeder extends Seeder
         Fact $condition,
         float $certainty,
         string $classification,
-        string $riskLevel
+        string $riskLevel,
+        Expert $expert
     ): Rule {
         $rule = Rule::firstOrCreate(
             ['code' => $code],
@@ -213,6 +232,13 @@ class ExpertSystemSeeder extends Seeder
             ['rule_id' => $rule->id, 'fact_id' => $condition->id],
             ['operator' => 'PRESENT']
         );
+        $rule->experts()->syncWithoutDetaching([
+            $expert->id => [
+                'certainty_factor' => $certainty,
+                'notes' => 'CF ahli untuk rule: '.$name,
+                'validated_at' => now(),
+            ],
+        ]);
 
         return $rule;
     }

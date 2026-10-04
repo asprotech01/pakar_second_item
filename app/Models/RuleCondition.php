@@ -7,11 +7,16 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class RuleCondition extends Model
 {
-    protected $fillable = ['rule_id', 'fact_id', 'operator', 'expected_value', 'sequence'];
+    protected $fillable = [
+        'rule_id', 'fact_id', 'operator', 'expected_value', 'sequence', 'group_number', 'logical_operator',
+    ];
 
     protected function casts(): array
     {
-        return ['sequence' => 'integer'];
+        return [
+            'sequence' => 'integer',
+            'group_number' => 'integer',
+        ];
     }
 
     public function rule(): BelongsTo

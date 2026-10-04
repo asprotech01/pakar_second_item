@@ -89,14 +89,49 @@ class AssessmentController extends Controller
                 continue;
             }
 
-            if ($selection === 'unknown') {
+            $answerStates = [
+                'unknown' => AssessmentAnswer::STATE_UNKNOWN,
+                'not_applicable' => AssessmentAnswer::STATE_NOT_APPLICABLE,
+                'not_tested' => AssessmentAnswer::STATE_NOT_TESTED,
+            ];
+
+            if (isset($answerStates[$selection])) {
                 $preparedAnswers[] = [
                     'question_id' => $question->id,
                     'question_option_id' => null,
-                    'answer_state' => AssessmentAnswer::STATE_UNKNOWN,
+                    'answer_state' => $answerStates[$selection],
                     'evidence_source' => 'UNKNOWN',
                     'observed_value' => null,
                     'certainty_factor' => 0,
+                    'notes' => $input['notes'] ?? null,
+                ];
+
+                continue;
+            }
+
+            $inputType = strtoupper((string) ($question->input_type ?? 'single_choice'));
+            if (in_array($inputType, ['NUMBER', 'NUMERIC'], true) || is_numeric((string) $selection)) {
+                $normalizedValue = trim((string) $selection);
+                if (! is_numeric($normalizedValue)) {
+                    throw ValidationException::withMessages([
+                        'answers.'.$question->id.'.selection' => 'Nilai numerik tidak valid.',
+                    ]);
+                }
+
+                $source = $input['source'] ?? 'UNKNOWN';
+                if (! in_array($source, AssessmentAnswer::EVIDENCE_SOURCES, true)) {
+                    throw ValidationException::withMessages([
+                        'answers.'.$question->id.'.source' => 'Sumber bukti tidak valid.',
+                    ]);
+                }
+
+                $preparedAnswers[] = [
+                    'question_id' => $question->id,
+                    'question_option_id' => null,
+                    'answer_state' => AssessmentAnswer::STATE_KNOWN,
+                    'evidence_source' => $source,
+                    'observed_value' => $normalizedValue,
+                    'certainty_factor' => 1,
                     'notes' => $input['notes'] ?? null,
                 ];
 
