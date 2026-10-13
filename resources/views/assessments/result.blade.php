@@ -9,45 +9,6 @@
         'unverified' => 'Belum cukup terverifikasi',
     ];
     $riskLabels = ['low' => 'Rendah', 'medium' => 'Sedang', 'high' => 'Tinggi', 'critical' => 'Kritis', 'unknown' => 'Belum diketahui'];
-    $repairEstimateEntries = collect($result->recommendations ?? [])
-        ->map(fn ($recommendation) => $recommendation['title'] ?? '')
-        ->merge(collect($result->active_rules ?? [])->map(fn ($rule) => $rule['name'] ?? ''))
-        ->filter()
-        ->map(function ($label) {
-            $normalized = strtolower((string) $label);
-
-            if (str_contains($normalized, 'baterai')) {
-                return ['name' => 'Baterai', 'reason' => 'Risiko kesehatan baterai dan pengisian', 'estimate' => 'Rp350.000 – Rp700.000'];
-            }
-
-            if (str_contains($normalized, 'layar') || str_contains($normalized, 'display')) {
-                return ['name' => 'Layar', 'reason' => 'Kerusakan visual atau sentuh', 'estimate' => 'Rp550.000 – Rp1.600.000'];
-            }
-
-            if (str_contains($normalized, 'port') || str_contains($normalized, 'charging') || str_contains($normalized, 'pengisian')) {
-                return ['name' => 'Port Pengisian', 'reason' => 'Port / charging tidak stabil', 'estimate' => 'Rp200.000 – Rp450.000'];
-            }
-
-            if (str_contains($normalized, 'kamera')) {
-                return ['name' => 'Kamera', 'reason' => 'Kamera depan atau belakang bermasalah', 'estimate' => 'Rp350.000 – Rp950.000'];
-            }
-
-            if (str_contains($normalized, 'audio') || str_contains($normalized, 'speaker') || str_contains($normalized, 'mikrofon')) {
-                return ['name' => 'Audio', 'reason' => 'Speaker atau mikrofon tidak normal', 'estimate' => 'Rp150.000 – Rp450.000'];
-            }
-
-            if (str_contains($normalized, 'tombol') || str_contains($normalized, 'button') || str_contains($normalized, 'control')) {
-                return ['name' => 'Tombol', 'reason' => 'Kontrol fisik tidak responsif', 'estimate' => 'Rp120.000 – Rp350.000'];
-            }
-
-            if (str_contains($normalized, 'konektivitas') || str_contains($normalized, 'wifi') || str_contains($normalized, 'bluetooth') || str_contains($normalized, 'sim')) {
-                return ['name' => 'Konektivitas', 'reason' => 'Jaringan atau koneksi nirkabel bermasalah', 'estimate' => 'Rp180.000 – Rp600.000'];
-            }
-
-            return ['name' => 'Komponen teknis', 'reason' => 'Pemeriksaan lanjutan diperlukan', 'estimate' => 'Rp150.000 – Rp500.000'];
-        })
-        ->unique(fn ($item) => $item['name'])
-        ->values();
 @endphp
 
 @section('title', 'Hasil asesmen | Tilik')
@@ -58,8 +19,19 @@
     <section class="result-header">
         <div>
             <p class="eyebrow">HASIL EVALUASI <span class="eyebrow-rule"></span> #{{ str_pad((string) $assessmentSession->id, 5, '0', STR_PAD_LEFT) }}</p>
-            <h1>{{ data_get($assessmentSession->device_details, 'label') ?: $assessmentSession->deviceType->name }}</h1>
-            <p class="intro-copy">{{ $assessmentSession->deviceType->name }} <span class="copy-dot">·</span> {{ $result->evaluated_at?->format('d M Y, H:i') }}</p>
+            <h1>{{ $assessmentSession->device?->name ?: (data_get($assessmentSession->device_details, 'label') ?: $assessmentSession->deviceType->name) }}</h1>
+            <p class="intro-copy">
+                @if ($assessmentSession->device)
+                    {{ $assessmentSession->device->manufacturer_name ?: 'Merek tidak tersedia' }} <span class="copy-dot">·</span>
+                @endif
+                {{ $assessmentSession->deviceType->name }} <span class="copy-dot">·</span> {{ $result->evaluated_at?->format('d M Y, H:i') }}
+            </p>
+            @if ($assessmentSession->storage_variant)
+                <p class="intro-copy"><strong>Storage:</strong> {{ $assessmentSession->storage_variant }}</p>
+            @endif
+            @if ($assessmentSession->device?->image_url && filter_var($assessmentSession->device->image_url, FILTER_VALIDATE_URL) && in_array(parse_url($assessmentSession->device->image_url, PHP_URL_SCHEME), ['http', 'https'], true))
+                <img class="assessment-device-image" src="{{ $assessmentSession->device->image_url }}" alt="Gambar {{ $assessmentSession->device->name }}" loading="lazy">
+            @endif
         </div>
         <a class="button button-quiet" href="{{ route('dashboard') }}">← Ruang kerja</a>
     </section>
@@ -77,7 +49,11 @@
             <div class="score-heading"><span>CONFIDENCE</span><span class="score-mark">CF</span></div>
             <strong class="score-number">{{ number_format($result->confidence_score, 0) }}<small>%</small></strong>
             <div class="score-track"><span style="width: {{ min(100, max(0, $result->confidence_score)) }}%"></span></div>
-            <p>Keyakinan sistem atas kesimpulan terpilih. Ambang perangkat: {{ number_format(($result->confidence_threshold ?? 0) * 100, 0) }}%.</p>
+            <p>Confidence diagnosis memakai CF dari rule terkuat yang mendukung kesimpulan, bukan penjumlahan semua temuan.</p>
+            @if ($result->combined_support_score !== null)
+                <p>Dukungan gabungan rule untuk diagnosis ini: {{ number_format($result->combined_support_score, 2) }}% (CF gabungan, bukan probabilitas).</p>
+            @endif
+            <p>Ambang minimum kelulusan (pengaturan tipe perangkat): {{ number_format(($result->confidence_threshold ?? 0) * 100, 0) }}%. Nilai ini batas pembanding, bukan hasil perhitungan.</p>
         </article>
         <article class="score-panel score-completeness">
             <div class="score-heading"><span>DATA COMPLETENESS</span><span class="score-mark score-mark-orange">DATA</span></div>
@@ -129,57 +105,167 @@
         </section>
     @endif
 
-    @if ($repairEstimateEntries->isNotEmpty())
+    @if ($repairCostEstimates['has_issues'])
         <section class="report-section repair-estimate-section">
-            <div class="section-heading"><div><p class="eyebrow">ESTIMASI PERBAIKAN <span class="eyebrow-rule"></span> {{ $repairEstimateEntries->count() }}</p><h2>Komponen yang perlu ditangani</h2></div></div>
+            <div class="section-heading"><div><p class="eyebrow">Estimasi perbaikan <span class="eyebrow-rule"></span> {{ $repairCostEstimates['entries']->count() }}</p><h2>Komponen yang perlu ditangani</h2></div></div>
             <div class="estimate-list">
-                @foreach ($repairEstimateEntries as $estimate)
+                @foreach ($repairCostEstimates['entries'] as $estimate)
                     <article class="recommendation-item estimate-item">
                         <span class="recommendation-index">{{ str_pad((string) $loop->iteration, 2, '0', STR_PAD_LEFT) }}</span>
                         <div>
-                            <h3>{{ $estimate['name'] }}</h3>
-                            <p>{{ $estimate['reason'] }}</p>
+                            <h3>{{ $estimate->issue_name }}</h3>
+                            <p>{{ $estimate->description }}</p>
                         </div>
-                        <span class="estimate-price">{{ $estimate['estimate'] }}</span>
+                        <span class="estimate-price">Rp{{ number_format((float) $estimate->minimum_cost, 0, ',', '.') }} – Rp{{ number_format((float) $estimate->maximum_cost, 0, ',', '.') }}</span>
                     </article>
                 @endforeach
             </div>
+            @if ($repairCostEstimates['has_unavailable'])
+                <p>Estimasi biaya perbaikan belum tersedia</p>
+            @endif
         </section>
     @endif
 
-    <section class="purchase-conclusion verdict-{{ $result->classification }}">
-        <div>
-            <p class="eyebrow">Kesimpulan pembelian <span class="eyebrow-rule"></span> {{ strtoupper(str_replace('_', ' ', $result->classification ?? 'unverified')) }}</p>
-            <h2>
-                @if ($result->classification === 'layak' && $result->threshold_met)
-                    Produk layak dibeli
-                @elseif ($result->classification === 'tidak_direkomendasikan')
-                    Produk tidak layak dibeli
-                @elseif ($result->classification === 'bersyarat')
-                    Tunda pembelian sampai temuan ditangani
+    <section class="report-section purchase-cost-section">
+        <div class="section-heading"><div><p class="eyebrow">RINGKASAN BIAYA <span class="eyebrow-rule"></span></p><h2>Perkiraan biaya perangkat</h2></div></div>
+        <div class="purchase-cost-grid">
+            <article class="purchase-cost-card">
+                <span>Harga Beli</span>
+                @if ($purchaseEvaluation['has_purchase_price'])
+                    <strong>Rp {{ number_format((float) $purchaseEvaluation['purchase_price'], 2, ',', '.') }}</strong>
                 @else
-                    Belum cukup bukti untuk memutuskan
+                    <p>Harga beli belum tersedia.</p>
                 @endif
-            </h2>
-            <p>
-                @if ($result->classification === 'layak' && $result->threshold_met)
-                    Hasil pemeriksaan mendukung pembelian. Tetap cocokkan IMEI, pastikan akun lama sudah dilepas, dan sepakati garansi transaksi.
-                @elseif ($result->classification === 'tidak_direkomendasikan')
-                    Temuan berisiko tinggi membuat perangkat ini sebaiknya dihindari. Pertimbangkan unit lain daripada menanggung risiko keamanan atau kerusakan lanjutan.
-                @elseif ($result->classification === 'bersyarat')
-                    Gunakan estimasi biaya perbaikan di atas sebagai acuan awal. Pertimbangkan kembali pembelian setelah teknisi memastikan kondisi komponen dan biaya aktual.
+            </article>
+            <article class="purchase-cost-card">
+                <span>Estimasi Total Perbaikan</span>
+                @if ($purchaseEvaluation['has_repair_estimate'])
+                    <strong>Rp {{ number_format((float) $purchaseEvaluation['repair_cost_min'], 2, ',', '.') }} – Rp {{ number_format((float) $purchaseEvaluation['repair_cost_max'], 2, ',', '.') }}</strong>
+                    @if ($purchaseEvaluation['repair_estimate_status'] === 'no_repairable_issues')
+                        <p>Tidak ada kerusakan berbiaya teridentifikasi.</p>
+                    @endif
                 @else
-                    Lengkapi pemeriksaan yang belum diketahui atau belum dilakukan sebelum membayar. Jangan menganggap data yang belum diverifikasi sebagai kondisi normal.
+                    <p>Estimasi biaya perbaikan belum tersedia.</p>
                 @endif
-            </p>
-            @if (! empty($result->recommendations))
-                <ul class="purchase-advice-list">
-                    @foreach ($result->recommendations as $recommendation)
-                        <li><strong>{{ $recommendation['title'] }}</strong> {{ $recommendation['body'] }}</li>
-                    @endforeach
-                </ul>
+            </article>
+            <article class="purchase-cost-card purchase-cost-total">
+                <span>Total Biaya Efektif</span>
+                @if ($purchaseEvaluation['effective_cost_min'] !== null)
+                    <strong>Rp {{ number_format((float) $purchaseEvaluation['effective_cost_min'], 2, ',', '.') }} – Rp {{ number_format((float) $purchaseEvaluation['effective_cost_max'], 2, ',', '.') }}</strong>
+                @elseif (! $purchaseEvaluation['has_purchase_price'])
+                    <p>Total biaya efektif belum dapat dihitung karena harga beli belum tersedia.</p>
+                @else
+                    <p>Total biaya efektif belum dapat dihitung karena estimasi biaya perbaikan belum tersedia.</p>
+                @endif
+            </article>
+        </div>
+    </section>
+    <section class="report-section market-value-section">
+        <div class="section-heading"><div><p class="eyebrow">DATA PEMBANDING <span class="eyebrow-rule"></span></p><h2>Nilai Pasar</h2></div></div>
+        @if ($marketValue !== null)
+            <article class="purchase-cost-card market-value-card">
+                <strong>Rp {{ number_format((float) $marketValue->market_price_min, 2, ',', '.') }} – Rp {{ number_format((float) $marketValue->market_price_max, 2, ',', '.') }}</strong>
+                @if ($marketValue->storage_variant || $marketValue->condition)
+                    <p>{{ collect([$marketValue->storage_variant, $marketValue->condition])->filter()->implode(' · ') }}</p>
+                @endif
+                @if ($marketValue->source)
+                    <p>Sumber: {{ $marketValue->source }}</p>
+                @endif
+                @if ($marketValue->observed_at)
+                    <p>Diamati: {{ $marketValue->observed_at->format('d M Y') }}</p>
+                @endif
+            </article>
+        @else
+            @if ($assessmentSession->device && $assessmentSession->storage_variant)
+                <p>Belum tersedia untuk varian {{ $assessmentSession->storage_variant }}.</p>
+                @php
+                    $availableMarketValues = $assessmentSession->device->marketValues
+                        ->whereNotNull('storage_variant')
+                        ->sortBy('storage_variant')
+                        ->values();
+                @endphp
+                @if ($availableMarketValues->isNotEmpty())
+                    <p>Varian yang tersedia:</p>
+                    <div class="purchase-cost-grid">
+                        @foreach ($availableMarketValues as $availableMarketValue)
+                            <article class="purchase-cost-card market-value-card">
+                                <strong>{{ $availableMarketValue->storage_variant }}</strong>
+                                <p>Rp {{ number_format((float) $availableMarketValue->market_price_min, 2, ',', '.') }} – Rp {{ number_format((float) $availableMarketValue->market_price_max, 2, ',', '.') }}</p>
+                                @if ($availableMarketValue->condition)
+                                    <p>{{ $availableMarketValue->condition }}</p>
+                                @endif
+                            </article>
+                        @endforeach
+                    </div>
+                @else
+                    <p>Nilai pasar belum tersedia</p>
+                @endif
+            @else
+                <p>Nilai pasar belum tersedia</p>
+            @endif
+        @endif
+    </section>
+
+    <section class="purchase-evaluation-panel">
+        <div class="purchase-evaluation-heading">
+            <div>
+                <p class="eyebrow">LAPISAN KEPUTUSAN EKONOMI</p>
+                <h2>Evaluasi Pembelian</h2>
+            </div>
+            @if ($purchaseRecommendation['recommendation'] !== null)
+                <span class="purchase-evaluation-status">{{ $purchaseRecommendation['recommendation'] }}</span>
+            @endif
+        </div>
+        <div class="purchase-evaluation-details">
+            <p><strong>Diagnosis teknis:</strong> {{ $classificationLabels[$purchaseRecommendation['diagnosis']] ?? str_replace('_', ' ', $purchaseRecommendation['diagnosis'] ?? 'Belum diketahui') }}</p>
+            @if ($purchaseRecommendation['certainty_factor'] !== null)
+                <p><strong>CF diagnosis:</strong> {{ number_format($purchaseRecommendation['certainty_factor'], 0) }}% <span class="purchase-evaluation-note">(keyakinan diagnosis, bukan probabilitas kelayakan pembelian)</span></p>
+            @endif
+            @if (! $purchaseRecommendation['economic_available'])
+                <p class="purchase-evaluation-reason">Evaluasi ekonomi belum dapat dilakukan karena data harga belum lengkap.</p>
+                @if ($purchaseRecommendation['recommendation'] !== null)
+                    <p>{{ $purchaseRecommendation['reason'] }}</p>
+                @endif
+            @else
+                <p class="purchase-evaluation-reason">{{ $purchaseRecommendation['reason'] }}</p>
             @endif
         </div>
     </section>
+    @php
+        $purchaseSuggestion = match ($purchaseRecommendation['recommendation']) {
+            'LAYAK' => [
+                'title' => 'DIREKOMENDASIKAN UNTUK DIBELI',
+                'reason' => 'Berdasarkan evaluasi sistem, total biaya efektif lebih baik daripada nilai pasar. '.$purchaseRecommendation['reason'],
+            ],
+            'BERSYARAT' => $purchaseRecommendation['economic_available']
+                ? [
+                    'title' => 'PERTIMBANGKAN SEBELUM MEMBELI',
+                    'reason' => $purchaseRecommendation['reason'],
+                ]
+                : [
+                    'title' => 'LENGKAPI INFORMASI SEBELUM MEMBELI',
+                    'reason' => 'Nilai pasar atau harga belum cukup lengkap untuk melakukan perbandingan ekonomi.',
+                ],
+            'TIDAK LAYAK' => [
+                'title' => 'SEBAIKNYA TIDAK DIBELI',
+                'reason' => $purchaseRecommendation['reason'],
+            ],
+            default => null,
+        };
+    @endphp
+    @if ($purchaseSuggestion !== null)
+        <section class="purchase-evaluation-panel">
+            <div class="purchase-evaluation-heading">
+                <div>
+                    <p class="eyebrow">SARAN BERDASARKAN EVALUASI SISTEM</p>
+                    <h2>Saran Pembelian</h2>
+                </div>
+            </div>
+            <div class="purchase-evaluation-details">
+                <p class="purchase-evaluation-status">{{ $purchaseSuggestion['title'] }}</p>
+                <p class="purchase-evaluation-reason">{{ $purchaseSuggestion['reason'] }}</p>
+            </div>
+        </section>
+    @endif
 </div>
 @endsection

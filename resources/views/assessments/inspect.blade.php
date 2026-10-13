@@ -8,7 +8,19 @@
     <section class="inspection-heading">
         <div>
             <p class="eyebrow">{{ strtoupper($assessmentSession->deviceType->platform) }} <span class="eyebrow-rule"></span> ASESMEN #{{ str_pad((string) $assessmentSession->id, 5, '0', STR_PAD_LEFT) }}</p>
-            <h1>{{ data_get($assessmentSession->device_details, 'label') ?: $assessmentSession->deviceType->name }}</h1>
+            <h1>{{ $assessmentSession->device?->name ?: (data_get($assessmentSession->device_details, 'label') ?: $assessmentSession->deviceType->name) }}</h1>
+            @if ($assessmentSession->device)
+                <p class="assessment-device-meta">{{ $assessmentSession->device->manufacturer_name ?: 'Merek tidak tersedia' }}@if ($assessmentSession->device->device_type) <span class="copy-dot">·</span> {{ $assessmentSession->device->device_type }}@endif</p>
+                @if ($assessmentSession->storage_variant)
+                    <p class="assessment-device-meta"><strong>Storage:</strong> {{ $assessmentSession->storage_variant }}</p>
+                @endif
+                @if ($assessmentSession->device->image_url && filter_var($assessmentSession->device->image_url, FILTER_VALIDATE_URL) && in_array(parse_url($assessmentSession->device->image_url, PHP_URL_SCHEME), ['http', 'https'], true))
+                    <img class="assessment-device-image" src="{{ $assessmentSession->device->image_url }}" alt="Gambar {{ $assessmentSession->device->name }}" loading="lazy">
+                @endif
+            @endif
+            @if ($assessmentSession->purchase_price !== null)
+                <p class="assessment-device-meta"><strong>Harga Beli:</strong> Rp {{ number_format((float) $assessmentSession->purchase_price, 2, ',', '.') }}</p>
+            @endif
             <p class="intro-copy">Jawab berdasarkan bukti yang tersedia. Pilih “Belum diketahui” bila kondisi belum dapat dipastikan.</p>
         </div>
         <div class="inspection-total"><strong>{{ $questions->count() }}</strong><span>PEMERIKSAAN</span></div>

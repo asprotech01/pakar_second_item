@@ -4,13 +4,19 @@ namespace App\Http\Controllers;
 
 use App\Models\AssessmentAnswer;
 use App\Models\AssessmentSession;
+use App\Models\Device;
 use App\Models\DeviceType;
 use App\Models\Question;
 use App\Services\ExpertSystem\ExpertEvaluationService;
+use App\Services\MarketValueService;
+use App\Services\PurchaseEvaluationService;
+use App\Services\PurchaseRecommendationService;
+use App\Services\RepairCostService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
@@ -20,30 +26,49 @@ class AssessmentController extends Controller
     {
         $validated = $request->validate([
             'device_type_id' => ['required', 'integer', 'exists:device_types,id'],
+            'workspace' => ['sometimes', 'accepted'],
+            'device_id' => ['required_if:workspace,1', 'nullable', 'integer', 'exists:devices,id'],
             'device_label' => ['nullable', 'string', 'max:100'],
+            'purchase_price' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:9999999999999.99'],
         ]);
 
         $deviceType = DeviceType::query()
             ->where('is_active', true)
             ->findOrFail($validated['device_type_id']);
+        $device = isset($validated['device_id'])
+            ? Device::query()->findOrFail($validated['device_id'])
+            : null;
+        $storageVariants = $device?->storageVariants() ?? [];
+        $storageRules = $device !== null && $storageVariants !== []
+            ? ['required', 'string', Rule::in($storageVariants)]
+            : ['nullable', 'prohibited'];
+        $storageVariant = $request->validate([
+            'storage_variant' => $storageRules,
+        ])['storage_variant'] ?? null;
 
         $session = AssessmentSession::create([
+            'user_id' => $request->user()?->id,
             'device_type_id' => $deviceType->id,
+            'device_id' => $device?->id,
+            'storage_variant' => $storageVariant,
+            'purchase_price' => $validated['purchase_price'] ?? null,
             'status' => 'in_progress',
-            'device_details' => ['label' => $validated['device_label'] ?? null],
+            'device_details' => ['label' => $device?->name ?? ($validated['device_label'] ?? null)],
             'started_at' => now(),
         ]);
 
         return redirect()->route('assessments.show', $session);
     }
 
-    public function show(AssessmentSession $assessmentSession): View|RedirectResponse
+    public function show(Request $request, AssessmentSession $assessmentSession): View|RedirectResponse
     {
+        abort_unless($request->user()?->id === $assessmentSession->user_id || $request->user()?->isAdmin(), 403);
+
         if ($assessmentSession->status === 'evaluated' && $assessmentSession->result()->exists()) {
             return redirect()->route('assessments.result', $assessmentSession);
         }
 
-        $assessmentSession->load('deviceType');
+        $assessmentSession->load(['deviceType', 'device']);
         $questions = $this->questionsFor($assessmentSession);
         $answers = $assessmentSession->answers()->with('option')->get()->keyBy('question_id');
 
@@ -60,6 +85,8 @@ class AssessmentController extends Controller
         AssessmentSession $assessmentSession,
         ExpertEvaluationService $evaluationService
     ): RedirectResponse {
+        abort_unless($request->user()?->id === $assessmentSession->user_id || $request->user()?->isAdmin(), 403);
+
         $questions = $this->questionsFor($assessmentSession);
         $selectionValidator = Validator::make($request->all(), [
             'answers' => ['required', 'array'],
@@ -185,15 +212,45 @@ class AssessmentController extends Controller
         return redirect()->route('assessments.result', $assessmentSession);
     }
 
-    public function result(AssessmentSession $assessmentSession): View|RedirectResponse
-    {
-        $assessmentSession->load(['deviceType', 'result.primaryConclusion']);
+    public function result(
+        Request $request,
+        AssessmentSession $assessmentSession,
+        RepairCostService $repairCostService,
+        PurchaseEvaluationService $purchaseEvaluationService,
+        MarketValueService $marketValueService,
+        PurchaseRecommendationService $purchaseRecommendationService
+    ): View|RedirectResponse {
+        abort_unless($request->user()?->id === $assessmentSession->user_id || $request->user()?->isAdmin(), 403);
+
+        $assessmentSession->load(['deviceType', 'device.marketValues', 'result.primaryConclusion']);
 
         if ($assessmentSession->result === null) {
             return redirect()->route('assessments.show', $assessmentSession);
         }
 
-        return view('assessments.result', ['assessmentSession' => $assessmentSession]);
+        $repairCostEstimates = $repairCostService->estimatesFor($assessmentSession->result);
+        $marketValue = $assessmentSession->device === null
+            ? null
+            : $marketValueService->forDevice(
+                $assessmentSession->device,
+                $assessmentSession->storage_variant
+            );
+        $purchaseEvaluation = $purchaseEvaluationService->calculate(
+            $assessmentSession->purchase_price,
+            $repairCostEstimates
+        );
+
+        return view('assessments.result', [
+            'assessmentSession' => $assessmentSession,
+            'repairCostEstimates' => $repairCostEstimates,
+            'marketValue' => $marketValue,
+            'purchaseEvaluation' => $purchaseEvaluation,
+            'purchaseRecommendation' => $purchaseRecommendationService->evaluate(
+                $assessmentSession->result,
+                $purchaseEvaluation,
+                $marketValue
+            ),
+        ]);
     }
 
     private function questionsFor(AssessmentSession $assessmentSession)

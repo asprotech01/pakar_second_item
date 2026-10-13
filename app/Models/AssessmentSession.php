@@ -10,13 +10,14 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class AssessmentSession extends Model
 {
     protected $fillable = [
-        'user_id', 'device_type_id', 'status', 'device_details', 'started_at', 'completed_at',
+        'user_id', 'device_type_id', 'device_id', 'storage_variant', 'purchase_price', 'status', 'device_details', 'started_at', 'completed_at',
     ];
 
     protected function casts(): array
     {
         return [
             'device_details' => 'array',
+            'purchase_price' => 'decimal:2',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
         ];
@@ -30,6 +31,11 @@ class AssessmentSession extends Model
     public function deviceType(): BelongsTo
     {
         return $this->belongsTo(DeviceType::class);
+    }
+
+    public function device(): BelongsTo
+    {
+        return $this->belongsTo(Device::class);
     }
 
     public function answers(): HasMany

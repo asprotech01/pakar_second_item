@@ -4,6 +4,9 @@
 
 @section('content')
 <div class="page-wrap dashboard-page">
+    @if ($errors->any())
+        <div class="form-errors" role="alert">{{ $errors->first() }}</div>
+    @endif
     <section class="welcome-row">
         <div>
             <p class="eyebrow">RUANG INSPEKSI <span class="eyebrow-rule"></span> {{ now()->format('d.m.Y') }}</p>
@@ -40,32 +43,94 @@
 
     <section class="device-section" id="pilih-perangkat">
         <div class="section-heading">
-            <div><p class="eyebrow">MULAI BARU <span class="eyebrow-rule"></span> 01</p><h2>Pilih jenis perangkat</h2></div>
+            <div><p class="eyebrow">MULAI BARU <span class="eyebrow-rule"></span> 01</p><h2>Pilih perangkat</h2></div>
             <span class="section-aside">Estimasi 3–5 menit · Simpan hasil otomatis</span>
         </div>
-        <div class="device-grid">
-            @forelse ($deviceTypes as $deviceType)
-                <form class="device-card {{ $deviceType->platform === 'ios' ? 'device-card-ios' : '' }}" method="POST" action="{{ route('assessments.store') }}">
-                    @csrf
-                    <input type="hidden" name="device_type_id" value="{{ $deviceType->id }}">
-                    <div class="device-card-top">
-                        <span class="platform-tag">{{ $deviceType->platform === 'ios' ? 'APPLE · IOS' : 'GOOGLE · ANDROID' }}</span>
-                        <span class="device-arrow" aria-hidden="true">↗</span>
-                    </div>
-                    <div class="device-illustration {{ $deviceType->platform === 'ios' ? 'illustration-apple' : '' }}" aria-hidden="true">
-                        <img src="{{ asset($deviceType->platform === 'ios' ? 'images/phone-device-detail.jpg' : 'images/phone-inspection-hero.jpg') }}" alt="">
-                    </div>
-                    <div class="device-card-title"><h3>{{ $deviceType->name }}</h3><span>{{ str_pad((string) $deviceType->questions_count, 2, '0', STR_PAD_LEFT) }} cek</span></div>
-                    <label class="device-label-field">
-                        <span>Nama/model perangkat <small>opsional</small></span>
-                        <input type="text" name="device_label" maxlength="100" placeholder="{{ $deviceType->platform === 'ios' ? 'Contoh: iPhone 12 Pro' : 'Contoh: Galaxy A54' }}">
-                    </label>
-                    <button class="button button-dark" type="submit">Mulai inspeksi <span aria-hidden="true">→</span></button>
-                </form>
-            @empty
-                <div class="empty-state">Belum ada tipe perangkat aktif. Jalankan seeder knowledge base untuk menyiapkan Android dan iPhone.</div>
-            @endforelse
-        </div>
+        <form
+            class="workspace-assessment-form"
+            method="POST"
+            action="{{ route('assessments.store') }}"
+            data-workspace-assessment
+            data-autocomplete-url="{{ route('devices.autocomplete') }}"
+            data-initial-device="{{ $selectedDevice ? json_encode([
+                'id' => $selectedDevice->id,
+                'name' => $selectedDevice->name,
+                'manufacturer_name' => $selectedDevice->manufacturer_name,
+                'storage_variants' => $selectedDevice->storageVariants(),
+            ]) : '' }}"
+            data-initial-storage="{{ old('storage_variant') }}"
+        >
+            @csrf
+            <input type="hidden" name="workspace" value="1">
+            <input type="hidden" name="device_id" value="{{ old('device_id', $selectedDevice?->id) }}" data-device-id>
+
+            <div class="workspace-device-search">
+                <label for="workspace-device-search">Perangkat</label>
+                <input
+                    id="workspace-device-search"
+                    type="search"
+                    name="device_search"
+                    value="{{ old('device_search', $selectedDevice?->name) }}"
+                    maxlength="100"
+                    placeholder="Cari nama atau merek, misalnya Vivo V30"
+                    autocomplete="off"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded="false"
+                    aria-controls="workspace-device-results"
+                    required
+                    data-device-search
+                >
+                <div id="workspace-device-results" class="workspace-device-results" role="listbox" hidden data-device-results></div>
+                <p class="workspace-search-status" role="status" aria-live="polite" data-search-status>Perangkat dicari dari katalog lokal yang sudah tersimpan.</p>
+                <div class="workspace-selected-device" @if (! $selectedDevice) hidden @endif data-selected-device>
+                    <strong data-selected-name>{{ $selectedDevice?->name }}</strong>
+                    <span data-selected-manufacturer>{{ $selectedDevice?->manufacturer_name }}</span>
+                    <span data-selected-storage></span>
+                </div>
+                @error('device_id') <span class="field-error">{{ $message }}</span> @enderror
+            </div>
+
+            <div class="workspace-form-fields">
+                <label class="workspace-field">
+                    <span>Profil pemeriksaan</span>
+                    <select name="device_type_id" required>
+                        <option value="">Pilih profil perangkat</option>
+                        @foreach ($deviceTypes as $deviceType)
+                            <option value="{{ $deviceType->id }}" @selected(old('device_type_id') == $deviceType->id)>
+                                {{ $deviceType->name }}
+                            </option>
+                        @endforeach
+                    </select>
+                    @error('device_type_id') <small class="field-error">{{ $message }}</small> @enderror
+                </label>
+
+                <label class="workspace-field" hidden data-storage-field>
+                    <span>Storage</span>
+                    <select name="storage_variant" disabled data-storage-select>
+                        <option value="">Pilih storage</option>
+                    </select>
+                    @error('storage_variant') <small class="field-error">{{ $message }}</small> @enderror
+                </label>
+
+                <label class="workspace-field">
+                    <span>Harga beli <small>opsional</small></span>
+                    <input
+                        type="number"
+                        name="purchase_price"
+                        value="{{ old('purchase_price') }}"
+                        min="0.01"
+                        max="9999999999999.99"
+                        step="0.01"
+                        inputmode="decimal"
+                        placeholder="Contoh: 4000000"
+                    >
+                    @error('purchase_price') <small class="field-error">{{ $message }}</small> @enderror
+                </label>
+            </div>
+
+            <button class="button button-dark workspace-submit" type="submit">Mulai assessment <span aria-hidden="true">→</span></button>
+        </form>
     </section>
 
     <section class="recent-section">

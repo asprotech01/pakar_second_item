@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'mobile_api' => [
+        'base_url' => env('MOBILE_API_BASE_URL', 'https://api.mobileapi.dev'),
+        'key' => env('MOBILE_API_KEY'),
+    ],
 ];

@@ -1,4 +1,173 @@
 document.addEventListener('DOMContentLoaded', () => {
+	document.addEventListener('click', (event) => {
+		const openButton = event.target.closest('[data-open-device-preview]');
+		if (openButton) {
+			document.getElementById(openButton.dataset.openDevicePreview)?.showModal();
+			return;
+		}
+
+		const closeButton = event.target.closest('[data-close-device-preview]');
+		if (closeButton) closeButton.closest('dialog')?.close();
+	});
+
+	const workspaceForm = document.querySelector('[data-workspace-assessment]');
+
+	if (workspaceForm) {
+		const searchInput = workspaceForm.querySelector('[data-device-search]');
+		const deviceIdInput = workspaceForm.querySelector('[data-device-id]');
+		const resultsList = workspaceForm.querySelector('[data-device-results]');
+		const searchStatus = workspaceForm.querySelector('[data-search-status]');
+		const selectedDevice = workspaceForm.querySelector('[data-selected-device]');
+		const selectedName = workspaceForm.querySelector('[data-selected-name]');
+		const selectedManufacturer = workspaceForm.querySelector('[data-selected-manufacturer]');
+		const selectedStorage = workspaceForm.querySelector('[data-selected-storage]');
+		const storageField = workspaceForm.querySelector('[data-storage-field]');
+		const storageSelect = workspaceForm.querySelector('[data-storage-select]');
+		const endpoint = workspaceForm.dataset.autocompleteUrl;
+		let searchTimer;
+		let activeRequest;
+
+		const storageVariants = (values) => {
+			const flattened = [];
+			const collectValues = (value) => {
+				if (Array.isArray(value)) {
+					value.forEach(collectValues);
+				} else if (typeof value === 'string' || typeof value === 'number') {
+					String(value).split(',').forEach((variant) => {
+						const canonicalValue = variant.trim();
+						if (canonicalValue && !flattened.includes(canonicalValue)) flattened.push(canonicalValue);
+					});
+				}
+			};
+
+			collectValues(values);
+			return flattened;
+		};
+
+		const clearSelectedDevice = () => {
+			deviceIdInput.value = '';
+			selectedDevice.hidden = true;
+			selectedName.textContent = '';
+			selectedManufacturer.textContent = '';
+			selectedStorage.textContent = '';
+			storageField.hidden = true;
+			storageSelect.replaceChildren(new Option('Pilih storage', ''));
+			storageSelect.disabled = true;
+			storageSelect.required = false;
+			searchInput.setCustomValidity('');
+		};
+
+		const selectDevice = (device) => {
+			const variants = storageVariants(device.storage_variants);
+			deviceIdInput.value = device.id;
+			searchInput.value = device.name;
+			searchInput.setCustomValidity('');
+			selectedName.textContent = device.name;
+			selectedManufacturer.textContent = device.manufacturer_name || 'Merek tidak tersedia';
+			selectedStorage.textContent = variants.length ? variants.join(' · ') : 'Informasi storage tidak tersedia';
+			selectedDevice.hidden = false;
+			resultsList.replaceChildren();
+			resultsList.hidden = true;
+			searchInput.setAttribute('aria-expanded', 'false');
+			storageField.hidden = variants.length === 0;
+			storageSelect.replaceChildren(new Option('Pilih storage', ''));
+
+			variants.forEach((variant) => storageSelect.add(new Option(variant, variant)));
+			storageSelect.disabled = variants.length === 0;
+			storageSelect.required = variants.length > 0;
+			if (variants.length === 1) storageSelect.value = variants[0];
+			searchStatus.textContent = 'Perangkat dipilih. Pastikan profil pemeriksaan sesuai dengan perangkat.';
+		};
+
+		const renderDevices = (devices) => {
+			resultsList.replaceChildren();
+
+			devices.forEach((device) => {
+				const variants = storageVariants(device.storage_variants);
+				const option = document.createElement('button');
+				const title = document.createElement('strong');
+				const details = document.createElement('span');
+				const storage = document.createElement('small');
+
+				option.type = 'button';
+				option.className = 'workspace-device-option';
+				option.setAttribute('role', 'option');
+				option.setAttribute('aria-selected', 'false');
+				title.textContent = device.name;
+				details.textContent = device.manufacturer_name || 'Merek tidak tersedia';
+				storage.textContent = variants.length ? variants.join(' · ') : 'Storage tidak tersedia';
+				option.append(title, details, storage);
+				option.addEventListener('click', () => selectDevice(device));
+				resultsList.append(option);
+			});
+
+			resultsList.hidden = devices.length === 0;
+			searchInput.setAttribute('aria-expanded', String(devices.length > 0));
+			searchStatus.textContent = devices.length ? `${devices.length} perangkat ditemukan.` : 'Perangkat tidak ditemukan. Coba nama atau merek lain.';
+		};
+
+		const initialDevice = workspaceForm.dataset.initialDevice;
+		if (initialDevice) {
+			try {
+				const device = JSON.parse(initialDevice);
+				selectDevice(device);
+				const previousStorage = workspaceForm.dataset.initialStorage;
+				if (previousStorage && Array.from(storageSelect.options).some((option) => option.value === previousStorage)) {
+					storageSelect.value = previousStorage;
+				}
+			} catch {
+				searchStatus.textContent = 'Perangkat sebelumnya tidak dapat dipulihkan. Silakan cari dan pilih kembali.';
+				clearSelectedDevice();
+			}
+		}
+
+		searchInput.addEventListener('input', () => {
+			clearTimeout(searchTimer);
+			activeRequest?.abort();
+			clearSelectedDevice();
+			resultsList.replaceChildren();
+			resultsList.hidden = true;
+			searchInput.setAttribute('aria-expanded', 'false');
+
+			const query = searchInput.value.trim();
+			if (query.length < 2) {
+				searchStatus.textContent = 'Ketik minimal 2 karakter untuk mencari perangkat tersimpan.';
+				return;
+			}
+
+			searchStatus.textContent = 'Mencari perangkat tersimpan…';
+			searchTimer = setTimeout(async () => {
+				activeRequest = new AbortController();
+
+				try {
+					const response = await fetch(`${endpoint}?q=${encodeURIComponent(query)}`, {
+						headers: { Accept: 'application/json' },
+						signal: activeRequest.signal,
+					});
+					if (!response.ok) throw new Error('Device search request failed.');
+
+					const payload = await response.json();
+					renderDevices(Array.isArray(payload.devices) ? payload.devices : []);
+				} catch (error) {
+					if (error.name === 'AbortError') return;
+
+					resultsList.replaceChildren();
+					resultsList.hidden = true;
+					searchInput.setAttribute('aria-expanded', 'false');
+					searchStatus.textContent = 'Pencarian perangkat gagal. Silakan coba lagi.';
+				}
+			}, 250);
+		});
+
+		workspaceForm.addEventListener('submit', (event) => {
+			if (!deviceIdInput.value) {
+				event.preventDefault();
+				searchInput.setCustomValidity('Pilih perangkat dari hasil pencarian sebelum memulai assessment.');
+				searchInput.reportValidity();
+			}
+		});
+	}
+
 	const form = document.querySelector('[data-inspection-form]');
 
 	if (!form) return;

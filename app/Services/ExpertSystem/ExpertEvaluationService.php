@@ -46,9 +46,16 @@ class ExpertEvaluationService
         $notEvaluableRules = $chaining['not_evaluable_rules'] ?? [];
 
         $completeness = $this->dataCompleteness($questions, $answers);
-        $conclusions = $this->conclusions($chaining['fired_rules'], $certainty['certainty_by_fact']);
+        $conclusions = $this->conclusions(
+            $chaining['fired_rules'],
+            $certainty['certainty_by_fact'],
+            $certainty['rule_contributions']
+        );
         $selectedConclusion = $conclusions[0] ?? null;
         $confidence = max(0, (float) ($selectedConclusion['certainty'] ?? 0)) * 100;
+        $combinedSupport = $selectedConclusion === null
+            ? null
+            : max(0, (float) $selectedConclusion['combined_support']) * 100;
         $risk = $this->riskLevel($chaining['fired_rules'], $conclusions);
         $confidenceThreshold = (float) $session->deviceType->confidence_threshold;
         $completenessThreshold = (float) $session->deviceType->completeness_threshold;
@@ -80,6 +87,7 @@ class ExpertEvaluationService
             $session,
             $selectedConclusion,
             $confidence,
+            $combinedSupport,
             $completeness,
             $risk,
             $thresholdMet,
@@ -96,6 +104,7 @@ class ExpertEvaluationService
                     'primary_conclusion_fact_id' => $selectedConclusion['id'] ?? null,
                     'classification' => $selectedConclusion['classification'] ?? 'unverified',
                     'confidence_score' => round($confidence, 2),
+                    'combined_support_score' => $combinedSupport === null ? null : round($combinedSupport, 2),
                     'data_completeness' => round($completeness, 2),
                     'risk_level' => $risk,
                     'threshold_met' => $thresholdMet,
@@ -279,11 +288,19 @@ class ExpertEvaluationService
         return $knownFacts;
     }
 
-    private function conclusions(array $firedRules, array $certaintyByFact): array
-    {
+    private function conclusions(
+        array $firedRules,
+        array $certaintyByFact,
+        array $ruleContributions
+    ): array {
         $codes = collect($firedRules)->pluck('conclusion')->unique()->all();
+        $strongestRuleCertaintyByConclusion = collect($ruleContributions)
+            ->groupBy('conclusion')
+            ->map(fn (Collection $contributions): float => (float) max(array_column($contributions->all(), 'certainty_factor')))
+            ->all();
+        $riskRank = ['unknown' => 0, 'low' => 1, 'medium' => 2, 'high' => 3, 'critical' => 4];
 
-        return Fact::query()
+        $conclusions = Fact::query()
             ->whereIn('code', $codes)
             ->where('is_conclusion', true)
             ->get()
@@ -292,11 +309,18 @@ class ExpertEvaluationService
                 'code' => $fact->code,
                 'classification' => $fact->classification,
                 'risk_level' => $fact->risk_level,
-                'certainty' => $certaintyByFact[$fact->code] ?? 0,
+                'certainty' => $strongestRuleCertaintyByConclusion[$fact->code] ?? 0,
+                'combined_support' => $certaintyByFact[$fact->code] ?? 0,
             ])
-            ->sortByDesc('certainty')
-            ->values()
             ->all();
+
+        usort($conclusions, fn (array $left, array $right): int => (
+            ($right['certainty'] <=> $left['certainty'])
+            ?: (($riskRank[$right['risk_level']] ?? 0) <=> ($riskRank[$left['risk_level']] ?? 0))
+            ?: ($right['combined_support'] <=> $left['combined_support'])
+        ));
+
+        return $conclusions;
     }
 
     private function riskLevel(array $firedRules, array $conclusions): string
